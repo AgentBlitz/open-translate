@@ -38,7 +38,7 @@ ENV NLLB_MODEL_SIZE="1.3B-distilled" \
     DTYPE="fp16" \
     MAX_BATCH_SIZE="32" \
     MAX_INPUT_LENGTH="10000" \
-    PORT="8000" \
+    PORT="8005" \
     HOST="0.0.0.0" \
     TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9;9.0;12.0"
 
@@ -59,8 +59,8 @@ COPY start.sh /start.sh
 COPY static /static
 RUN chmod +x /start.sh
 
-EXPOSE 8000
+EXPOSE 8005
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD curl -fsS "http://localhost:${PORT:-8000}/health" || exit 1
+    CMD curl -fsS "http://localhost:${PORT:-8005}/health" || exit 1
 
 CMD ["/start.sh"]

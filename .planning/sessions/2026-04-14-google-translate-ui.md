@@ -31,11 +31,11 @@ Added a minimal Google-Translate-style frontend to `open-translate` (a FastAPI/N
 ## Remaining Work
 
 - **Not tested end-to-end against a live server** — the NLLB model requires GPU + model download, so I did not boot it in this session. Syntax-checked `server.py` with `ast.parse` (passed). The user should run verification steps from the plan:
-  1. `./start.sh` → `GET http://localhost:8000/health` returns 200.
-  2. Open `http://localhost:8000/ui/`, confirm both dropdowns populate.
+  1. `./start.sh` → `GET http://localhost:8005/health` returns 200.
+  2. Open `http://localhost:8005/ui/`, confirm both dropdowns populate.
   3. Type "Hello world", target = Spanish → "Hola mundo" appears after ~350ms.
   4. DevTools Network: every translate call is `POST` with JSON body; zero `?q=` URLs.
-  5. `curl -i 'http://localhost:8000/language/translate/v2?q=hi&target=es'` → 405/404.
+  5. `curl -i 'http://localhost:8005/language/translate/v2?q=hi&target=es'` → 405/404.
   6. Server stdout contains no `"POST /... 200"` lines after translating.
   7. `curl -I -X POST ...` → headers include `cache-control: no-store, no-cache, must-revalidate`.
   8. Swap, copy, clear, detect flows work in the UI.

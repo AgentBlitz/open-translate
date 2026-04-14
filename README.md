@@ -28,7 +28,7 @@ Designed to work with existing Google Cloud Translate client libraries and integ
 `https://translation.googleapis.com/language/translate/v2`
 
 **After:**
-`http://localhost:8000/language/translate/v2`
+`http://localhost:8005/language/translate/v2`
 
 ---
 
@@ -36,11 +36,11 @@ Designed to work with existing Google Cloud Translate client libraries and integ
 
 ### 🐳 Run with Docker
 
-This command launches the API on port `8000` using the `600M` distilled model.
+This command launches the API on port `8005` using the `600M` distilled model.
 
 ```bash
 docker pull ivanvmoreno/open-translate:latest
-docker run --gpus all -p 8000:8000 \
+docker run --gpus all -p 8005:8005 \
   -e NLLB_MODEL_SIZE=600M \
   -e DTYPE=fp16 \
   ivanvmoreno/open-translate:latest
@@ -55,7 +55,7 @@ docker run --gpus all -p 8000:8000 \
 A minimal Google-Translate-style frontend is served directly by the API at:
 
 ```
-http://localhost:8000/ui/
+http://localhost:8005/ui/
 ```
 
 Two panels (source + target), language dropdowns populated from `/language/translate/v2/languages`, auto-detect, swap, and copy. No build step, no external CDN, no third-party requests.
@@ -90,7 +90,7 @@ Compatible with **Google Cloud Translation API v2**.
 **Single Translation:**
 
 ```bash
-curl -X POST "http://localhost:8000/language/translate/v2" \
+curl -X POST "http://localhost:8005/language/translate/v2" \
   -H "Content-Type: application/json" \
   -d '{
     "q": "Hello world!",
@@ -102,7 +102,7 @@ curl -X POST "http://localhost:8000/language/translate/v2" \
 Send arrays of strings to maximize GPU throughput.
 
 ```bash
-curl -X POST "http://localhost:8000/language/translate/v2" \
+curl -X POST "http://localhost:8005/language/translate/v2" \
   -H "Content-Type: application/json" \
   -d '{
     "q": ["Hello world!", "Self hosting rulez"],
@@ -117,7 +117,7 @@ curl -X POST "http://localhost:8000/language/translate/v2" \
 **POST** `/language/translate/v2/detect`
 
 ```bash
-curl -X POST "http://localhost:8000/language/translate/v2/detect" \
+curl -X POST "http://localhost:8005/language/translate/v2/detect" \
   -H "Content-Type: application/json" \
   -d '{"q": "Hola mundo"}'
 ```
@@ -127,7 +127,7 @@ curl -X POST "http://localhost:8000/language/translate/v2/detect" \
 **GET** `/language/translate/v2/languages`
 
 ```bash
-curl "http://localhost:8000/language/translate/v2/languages"
+curl "http://localhost:8005/language/translate/v2/languages"
 ```
 
 ---
@@ -142,7 +142,7 @@ curl "http://localhost:8000/language/translate/v2/languages"
 | `DTYPE` | `fp16` | `fp16`, `bf16`, or `fp32` |
 | `MAX_BATCH_SIZE` | `32` | Max sentences processed in parallel |
 | `HOST` | `0.0.0.0` | Bind host |
-| `PORT` | `8000` | Bind port |
+| `PORT` | `8005` | Bind port |
 
 ---
 
