@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>open-translate</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>open-translate</h1>
+      <p class="privacy">Text is never logged or written to disk on the server.</p>
+    </header>
+
+    <main class="panes">
+      <section class="pane" aria-label="Source">
+        <div class="pane-head">
+          <select id="source-lang" aria-label="Source language">
+            <option value="auto">Detect language</option>
+          </select>
+          <button id="clear-btn" type="button" aria-label="Clear input" title="Clear">×</button>
+        </div>
+        <textarea
+          id="source-text"
+          placeholder="Enter text"
+          maxlength="5000"
+          autocomplete="off"
+          autocorrect="off"
+          autocapitalize="off"
+          spellcheck="false"
+        ></textarea>
+        <div class="pane-foot">
+          <span id="detected-label" class="detected"></span>
+          <span id="char-count" class="counter">0 / 5000</span>
+        </div>
+      </section>
+
+      <button id="swap-btn" type="button" class="swap" aria-label="Swap languages" title="Swap">⇄</button>
+
+      <section class="pane" aria-label="Translation">
+        <div class="pane-head">
+          <select id="target-lang" aria-label="Target language"></select>
+          <button id="copy-btn" type="button" aria-label="Copy translation" title="Copy">Copy</button>
+        </div>
+        <textarea id="target-text" readonly placeholder="Translation"></textarea>
+        <div class="pane-foot">
+          <span id="status" class="status"></span>
+        </div>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

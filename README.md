@@ -50,6 +50,35 @@ docker run --gpus all -p 8000:8000 \
 
 ---
 
+## 🖥️ Web UI
+
+A minimal Google-Translate-style frontend is served directly by the API at:
+
+```
+http://localhost:8000/ui/
+```
+
+Two panels (source + target), language dropdowns populated from `/language/translate/v2/languages`, auto-detect, swap, and copy. No build step, no external CDN, no third-party requests.
+
+### Privacy guarantees enforced in code
+
+- No logging of request/response text anywhere in `server.py`.
+- No disk writes of user text — translation is an in-memory GPU pass and nothing is persisted.
+- **Access logs disabled** — `start.sh` launches uvicorn with `--no-access-log` so request lines never reach stdout (and therefore never reach Docker/journald log files).
+- **`GET /language/translate/v2` and `GET /language/translate/v2/detect` have been removed.** Only POST is accepted. This guarantees the text never appears in a URL, which would otherwise be captured by proxies, browser history, and access logs.
+- Every response carries `Cache-Control: no-store, no-cache, must-revalidate`, `Pragma: no-cache`, and `Referrer-Policy: no-referrer` via middleware, so browsers and intermediate proxies cannot cache translations to disk.
+- UI uses `cache: 'no-store'`, `credentials: 'omit'`, and stores only language-code preferences (never text) in `localStorage`.
+
+### Operator responsibilities (the code cannot enforce these)
+
+- **OS swap:** disable swap (`swapoff -a`) or use an encrypted swap device — otherwise memory pages holding in-flight text may be written to disk by the kernel.
+- **Log drivers:** ensure your Docker/systemd log driver is not capturing stdout to an unexpected sink. With `--no-access-log`, nothing containing user text is printed, but startup output and tracebacks still are.
+- **Reverse proxies:** do not front the service with a proxy that logs request bodies (nginx `access_log` with body capture, Cloudflare logging, etc.).
+
+> **Honest caveat:** Python strings are immutable and garbage-collected; there is no reliable way to zeroize request text in memory before GC. "Irrecoverable deletion" here means **never written to non-volatile storage in the first place**, which is what the hardening above achieves.
+
+---
+
 ## 🛠️ API Reference
 
 Compatible with **Google Cloud Translation API v2**.

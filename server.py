@@ -5,7 +5,8 @@ from typing import Any, Dict, List, Optional, Union
 
 import torch
 import deepspeed
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 
@@ -77,6 +78,20 @@ class TranslateRequest(BaseModel):
 
 
 app = FastAPI(title="NLLB-200 Inference API")
+
+
+@app.middleware("http")
+async def _no_store_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
+_UI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "ui")
+if os.path.isdir(_UI_DIR):
+    app.mount("/ui", StaticFiles(directory=_UI_DIR, html=True), name="ui")
 
 MODEL_ID = pick_model_id()
 DTYPE = pick_dtype()
@@ -344,24 +359,6 @@ def translate(req: TranslateRequest) -> Dict[str, Any]:
     return {"data": {"translations": translations}}
 
 
-@app.get("/language/translate/v2")
-def translate_get(
-    q: List[str] = Query(
-        ..., description="Text to translate. Repeat for batching: ?q=a&q=b"
-    ),
-    target: str = Query(..., description="Target language (ISO 639-1 or BCP-47)"),
-    source: Optional[str] = Query(None, description="Optional source language"),
-    format: Optional[str] = Query(
-        "text", description="Compatibility field; 'text' or 'html'."
-    ),
-    model: Optional[str] = Query(None, description="Compatibility field; ignored."),
-) -> Dict[str, Any]:
-    req = TranslateRequest(
-        q=q, target=target, source=source, format=format, model=model
-    )
-    return translate(req)
-
-
 class DetectRequest(BaseModel):
     q: Union[str, List[str]] = Field(
         ..., description="Text or list of texts to detect."
@@ -376,16 +373,6 @@ def detect(req: DetectRequest) -> Dict[str, Any]:
 
     detections = [[_detect_one(t)] for t in texts]
     return {"data": {"detections": detections}}
-
-
-@app.get("/language/translate/v2/detect")
-def detect_get(
-    q: List[str] = Query(
-        ..., description="Text to detect. Repeat for batching: ?q=a&q=b"
-    ),
-) -> Dict[str, Any]:
-    req = DetectRequest(q=q)
-    return detect(req)
 
 
 @app.get("/language/translate/v2/languages")

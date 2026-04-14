@@ -53,6 +53,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 WORKDIR /
 COPY server.py /server.py
 COPY start.sh /start.sh
+COPY static /static
 RUN chmod +x /start.sh
 
 EXPOSE 8000

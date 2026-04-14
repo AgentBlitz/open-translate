@@ -14,4 +14,5 @@ echo "  PORT=${PORT:-8000}"
 exec python -m uvicorn server:app \
   --host "${HOST:-0.0.0.0}" \
   --port "${PORT:-8000}" \
-  --workers 1
+  --workers 1 \
+  --no-access-log
