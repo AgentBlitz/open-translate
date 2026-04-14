@@ -258,12 +258,21 @@ def _startup():
 
     if torch.cuda.is_available():
         tp_size = pick_tp_size()
-        ds_engine = deepspeed.init_inference(
-            model=model,
-            dtype=DTYPE,
-            replace_with_kernel_inject=True,
-            tensor_parallel={"tp_size": tp_size},
-        )
+        try:
+            ds_engine = deepspeed.init_inference(
+                model=model,
+                dtype=DTYPE,
+                replace_with_kernel_inject=True,
+                tensor_parallel={"tp_size": tp_size},
+            )
+        except Exception as e:
+            print(
+                f"[startup] DeepSpeed kernel injection unavailable ({type(e).__name__}): "
+                f"{e}. Falling back to plain HF model on CUDA.",
+                flush=True,
+            )
+            ds_engine = None
+            model.to("cuda")
     else:
         ds_engine = None
 

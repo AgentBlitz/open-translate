@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.6.3-devel-ubuntu22.04 AS builder
+FROM nvidia/cuda:12.8.1-devel-ubuntu22.04 AS builder
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -16,11 +16,13 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir -r /tmp/requirements.txt && \
+    pip install --no-cache-dir \
+        --extra-index-url https://download.pytorch.org/whl/cu128 \
+        -r /tmp/requirements.txt && \
     rm /tmp/requirements.txt
 
 
-FROM nvidia/cuda:12.6.3-devel-ubuntu22.04 AS runtime
+FROM nvidia/cuda:12.8.1-devel-ubuntu22.04 AS runtime
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -37,7 +39,8 @@ ENV NLLB_MODEL_SIZE="1.3B-distilled" \
     MAX_BATCH_SIZE="32" \
     MAX_INPUT_LENGTH="10000" \
     PORT="8000" \
-    HOST="0.0.0.0"
+    HOST="0.0.0.0" \
+    TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9;9.0;12.0"
 
 RUN apt-get update -y && \
     apt-get install -y --no-install-recommends \
