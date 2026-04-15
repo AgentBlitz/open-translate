@@ -33,7 +33,7 @@ A self-hostable translation API + Google-Translate-style web UI, compatible with
 - **GET translate/detect endpoints removed** so text can never appear in a URL (which would be captured by proxies, browser history, access logs).
 - **uvicorn `--no-access-log`** in [start.sh](start.sh) — request lines never reach stdout / container log driver.
 - **No-store / no-cache / no-referrer headers** on every response.
-- **UI uses POST only**, `cache: 'no-store'`, `credentials: 'omit'`, stores only language codes in `localStorage` (never text or filenames). The Documents tab downloads via `URL.createObjectURL` + immediate `revokeObjectURL` — no intermediate OCR preview is ever rendered in the browser.
+- **UI uses POST only**, `cache: 'no-store'`, `credentials: 'same-origin'`, stores only language codes in `localStorage` (never text or filenames). The Documents tab downloads via `URL.createObjectURL` + immediate `revokeObjectURL` — no intermediate OCR preview is ever rendered in the browser. **Note:** `credentials: 'same-origin'` (was `'omit'` until 2026-04-15) is required so that when the UI is served behind Vast's caddy auth wrapper, the `C.<instance>_auth_token` cookie flows with same-origin fetches. Same-origin means the cookie never leaks to any other host.
 
 **Operator responsibilities not enforceable in code:** disable or encrypt OS swap; ensure the container log driver doesn't capture stdout somewhere unexpected; don't front with a reverse proxy that logs request bodies. See [README.md](README.md#privacy-guarantees-enforced-in-code) for the honest caveat about Python memory GC.
 
@@ -160,6 +160,8 @@ RunPod doesn't offer running-pod snapshots in the traditional VM sense. The repl
 - **GET translate endpoint is gone.** Any legacy client using `GET /language/translate/v2?q=...` will hit a 405. This was an intentional privacy change; do not restore it.
 - **Do NOT commit `.env`.** Confirmed gitignored. A GitHub PAT was briefly visible in `.env` during one session — revoke and rotate if you suspect exposure.
 - **PaddlePaddle 3.0 has no cu128 wheel.** The cu126 wheel (installed from `https://www.paddlepaddle.org.cn/packages/stable/cu126/`) runs correctly on the CUDA 12.8.1 base image via CUDA minor-version forward compatibility, confirmed on RTX 5090 / sm_120 with driver ≥ 570. If the cu126 wheel ever breaks on a new pod, `server.py`'s `_startup` catches the import/init failure and leaves `_ocr_engine = None` — the server still serves text + DOCX + text-layer PDFs; image/scanned-PDF requests return 503. Do not switch to CPU paddle silently, because a CPU fallback would be ~10× slower per page with no visible signal in the UI.
+- **Vast.ai (CUDA 13.1) needs Paddle cu129 ≥ 3.2.2.** The cu129 index (`https://www.paddlepaddle.org.cn/packages/stable/cu129/`) no longer ships `paddlepaddle-gpu==3.0.0` — lowest is 3.1.0. 3.2.2 is the tested pin. It overwrites torch's `nvidia-*-cu12` 12.8.x libs with 12.9.x equivalents; torch still reports `cuda 12.8` and detects `sm_120`, so this is cosmetic but worth watching on future bumps.
+- **Do not pin `paddleocr==3.0.0` on Python 3.12.** Its transitive `paddlex[ocr]==3.0.0` tries to build an old pandas from source, and pip's isolated build env is missing `pkg_resources`, which aborts install with `ModuleNotFoundError`. `--no-build-isolation` does not help. Fix: install `paddleocr` unpinned → resolves to 3.4.x (all-wheel). The `PaddleOCR(use_doc_orientation_classify=…, use_doc_unwarping=…, use_textline_orientation=…, device=…)` constructor, `.predict(np_array)` call, and `rec_texts` result shape are all unchanged, so `server.py`'s `_ocr_image()` works on both 3.0.x and 3.4.x with no code changes.
 - **PaddleOCR 3.0 API differs from 2.x.** Use `PaddleOCR(use_doc_orientation_classify=False, use_doc_unwarping=False, use_textline_orientation=True, lang=..., device='gpu')` and call `.predict(numpy_array)`; results expose `rec_texts` on each element. The old `use_angle_cls`/`.ocr()` API is gone.
 - **PaddleOCR weights cache** lives at `$PADDLE_PDX_CACHE_HOME` (default `/workspace/.cache/paddlex` on RunPod, `/opt/paddlex_cache` in the Docker image). Mount `/workspace` as a persistent volume so both the HF and Paddle caches survive pod restarts.
 - **VRAM budget.** NLLB-1.3B-distilled ≈ 3.3 GB, PaddleOCR det+rec ≈ 1–2 GB, total ~4–6 GB. Comfortable on the 5090's ~32 GB. If OOM appears under concurrent load, cap uvicorn with `--limit-concurrency 4` in [start.sh](start.sh) — do not disable the GPU path.
@@ -191,10 +193,59 @@ curl -s -D - -o /dev/null -X POST "$BASE/language/translate/v2" \
 curl -fsS "$BASE/ui/" | head -5
 ```
 
-## Known live deployment (as of last session)
+## Deploying on Vast.ai (PyTorch template, current primary path as of 2026-04-15)
 
-- RunPod pod on RTX 5090 (Blackwell sm_120), torch 2.8.0+cu128, deepspeed 0.18.3.
-- Public URL: `https://jz58e3ujkosmqr-8000.proxy.runpod.net/ui/`
-- Model: `facebook/nllb-200-distilled-1.3B`, fp16, ~3.3 GB VRAM used.
-- Access pod via: `ssh -p 46718 -i ~/.ssh/id_ed25519 root@149.36.1.202` (host + port rotate when pod is recreated).
-- `/workspace` was NOT mounted as a persistent volume on this instance — state is lost on pod recreation. Next pod should mount a 30 GB volume to avoid re-downloading the model.
+Vast.ai has replaced RunPod as the day-to-day deploy target for this project. Full recipe lives in [.planning/vast-deploy-plan.md](.planning/vast-deploy-plan.md); the short version:
+
+- Template: **Vast PyTorch** on Ubuntu 24.04, Python 3.12, **no torch pre-installed**, 120 GB rootfs, `HF_HOME=/workspace/.hf_home`, `WORKSPACE=/workspace`.
+- Port **8005** (NOT 8080 — `PORTAL_CONFIG` permanently maps 8080 → the Vast Jupyter server on this template). Tunnel from the Mac with `ssh -p <port> root@<host> -L 8080:localhost:8005` so the browser URL stays `http://localhost:8080/ui/`.
+- Torch: `torch==2.9.1` with `--extra-index-url https://download.pytorch.org/whl/cu128` (plain `python3 -m venv`, **not** `--system-site-packages` — there is nothing to inherit).
+- Paddle: **`paddlepaddle-gpu==3.2.2`** from `https://www.paddlepaddle.org.cn/packages/stable/cu129/`. The cu129 index no longer ships `3.0.0`.
+- PaddleOCR: **unpinned** (resolves to 3.4.x). **Do not pin `paddleocr==3.0.0`** on Python 3.12 — its transitive `paddlex[ocr]==3.0.0` tries to build an old pandas from source and fails with `ModuleNotFoundError: pkg_resources` inside pip's isolated build env. PaddleOCR 3.4.x keeps the same `PaddleOCR(...).predict(np_array)` / `rec_texts` API, so [server.py](server.py)'s `_ocr_image()` works unchanged.
+- Paddle 3.2.x overwrites torch's `nvidia-*-cu12` 12.8.x libs with 12.9.x equivalents. In practice this is benign — torch still reports `cuda 12.8` and detects `sm_120`. If a future paddle bump breaks generation, pin `paddlepaddle-gpu==3.2.2` and reinstall torch last.
+- Launch: `PORT=8005 PADDLE_PDX_CACHE_HOME=/workspace/.cache/paddlex bash scripts/runpod-launch.sh start` (the RunPod launcher is environment-agnostic — no rename needed).
+
+### Raw-IP access via caddy (added 2026-04-15)
+
+If trycloudflare.com is blocked on your network **and** port 8005 wasn't declared at instance creation (so no direct NAT entry exists), you cannot reach `http://<public-ip>:<mapped-port>/` directly. Workaround: ride on top of Vast's own caddy auth wrapper, which already reverse-proxies the **Tensorboard** port slot to an empty internal port.
+
+The chain is: public `212.13.234.30:<VAST_TCP_PORT_6006>` → caddy `:6006` → `reverse_proxy localhost:16006` (defined in `/etc/Caddyfile` by Vast's portal-aio). Nothing normally listens on `localhost:16006` except the tensorboard placeholder.
+
+Recipe:
+
+1. `supervisorctl stop tensorboard` — frees `127.0.0.1:16006`.
+2. Launch uvicorn with `HOST=127.0.0.1 PORT=16006` (not `0.0.0.0` — keeps it behind caddy, no direct path).
+3. Access via `http://<public-ip>:<VAST_TCP_PORT_6006>/ui/?token=<instance-auth-token>`. The token is in `/etc/Caddyfile` (search for `C.<instance>_auth_token`) and sets a 7-day cookie on first load. Same token works as `Authorization: Bearer` for API clients, or use basic auth with username `vastai` + the Vast instance password from the web console.
+4. **Required UI change** already applied: `static/ui/app.js` uses `credentials: 'same-origin'` (not `'omit'`) so the caddy auth cookie flows on `fetch()`. Otherwise the UI shows "Failed to load languages" because the `/language/translate/v2/languages` call gets a 401 from caddy.
+
+**Enabling HTTPS on the raw-IP URL** (added 2026-04-15, same session): Vast's boot sequence (`/etc/vast_boot.d/55-tls-cert-gen.sh`) pre-generates `/etc/instance.key` and `/etc/instance.crt`, signed by "Vast.ai Jupyter CA" with SAN `IP:<public-ip>`. Re-use that cert by adding one line to the `:6006` Caddyfile block:
+
+```
+:6006 {
+    tls /etc/instance.crt /etc/instance.key
+    ... (everything else unchanged)
+}
+```
+
+Then `/opt/portal-aio/caddy_manager/caddy reload --config /etc/Caddyfile`. The port now speaks HTTPS with a real (if CA-untrusted) cert; plain HTTP requests to the same port return 400. Browsers show a one-time "Not Secure" warning because the Vast CA isn't public, but the IP SAN matches so there's no additional hostname-mismatch error. The cert survives pod restart (it's baked into `/etc/instance.crt`), but the **Caddyfile edit does not** — `caddy_config_manager.py` may regenerate the file on reboot. After a pod restart, re-apply the one-line patch and reload caddy.
+
+Trade-offs:
+- Tensorboard supervisor stays stopped (not used on this project anyway).
+- Clients behind a network that blocks trycloudflare but allows raw TCP to arbitrary high ports can now reach the service over **HTTPS** on `https://<public-ip>:<VAST_TCP_PORT_6006>/ui/` (after the one-time CA warning).
+- All traffic still goes through caddy, which adds its own request-body size limit (default generous, but worth watching for 25 MB document uploads on first use).
+- Caddyfile patch is not persistent across pod recreation — document the one-liner in the raw-IP recipe above and reapply after each pod rebuild.
+
+## Known live deployments
+
+- **Vast.ai** pod on RTX 5090 (Blackwell sm_120), torch 2.9.1+cu128, paddle 3.2.2, paddleocr 3.4.1.
+  - SSH: `ssh -p 1431 root@212.13.234.30`
+  - **Direct raw-IP URL (current primary, HTTPS)**: `https://212.13.234.30:1965/ui/?token=56620e1fa2fb9c208f6a1fa29a4324007b684e18cdedad7f49a15b6f4ff39bb7` (caddy → `localhost:16006`, uvicorn bound to `HOST=127.0.0.1 PORT=16006`, tensorboard supervisor stopped to free 16006). Caddy's `:6006` vhost serves TLS using the pre-signed cert at `/etc/instance.crt` + `/etc/instance.key` (SAN `IP:212.13.234.30`, issuer `Vast.ai Jupyter CA`). Browsers show a one-time "Not Secure" warning because the Vast CA isn't in the public trust store; click through once and the 7-day auth cookie persists. After the first visit the `?token=` query parameter can be dropped. Plain HTTP on the same port now returns 400.
+  - Fallback via SSH tunnel: `ssh -p 1431 root@212.13.234.30 -L 8080:localhost:8005` → `http://localhost:8080/ui/` (only if the server is relaunched with `PORT=8005 HOST=0.0.0.0`, currently not the default).
+  - API clients must send `Authorization: Bearer 56620e1fa2fb9c208f6a1fa29a4324007b684e18cdedad7f49a15b6f4ff39bb7` when hitting the raw-IP URL — caddy rejects unauthenticated requests.
+  - The bearer token rotates when the Vast container is recreated; grep `/etc/Caddyfile` for `auth_token` after a pod reset to get the new value.
+  - Rootfs is the only persistent storage (no attached volume), but 120 GB gives comfortable headroom. HF + Paddle caches live under `/workspace`.
+  - Document + image translation verified end-to-end on this pod (DOCX round-trip + PNG OCR → translated DOCX).
+- **RunPod** pod on RTX 5090 (Blackwell sm_120), torch 2.8.0+cu128, deepspeed 0.18.3 — previous primary, kept as a fallback.
+  - `https://jz58e3ujkosmqr-8000.proxy.runpod.net/ui/`
+  - Access: `ssh -p 46718 -i ~/.ssh/id_ed25519 root@149.36.1.202` (host + port rotate when pod is recreated).
+  - `/workspace` was NOT mounted as a persistent volume on this instance — state is lost on pod recreation. Next pod should mount a 30 GB volume to avoid re-downloading the model.

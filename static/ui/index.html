@@ -9,12 +9,7 @@
   </head>
   <body>
     <header class="topbar">
-      <h1>open-translate</h1>
-      <p class="privacy">Text is never logged or written to disk on the server.</p>
-      <nav class="tabs" role="tablist" aria-label="Translation mode">
-        <button id="tab-text" type="button" class="tab active" role="tab" aria-selected="true">Text</button>
-        <button id="tab-docs" type="button" class="tab" role="tab" aria-selected="false">Documents</button>
-      </nav>
+      <p class="privacy">Text and files you send are never logged, stored, cached, or written to disk on the server &mdash; every request runs in-memory on the GPU and is discarded the moment the response finishes.</p>
     </header>
 
     <main id="text-pane" class="panes">
@@ -54,7 +49,7 @@
       </section>
     </main>
 
-    <section id="docs-pane" class="docs" hidden aria-label="Document translation">
+    <section id="docs-pane" class="docs" aria-label="Document translation">
       <div class="docs-card">
         <div class="docs-langs">
           <select id="doc-source-lang" aria-label="Document source language">

@@ -31,7 +31,7 @@
   async function loadLanguages() {
     const res = await fetch("/language/translate/v2/languages?target=en", {
       cache: "no-store",
-      credentials: "omit",
+      credentials: "same-origin",
     });
     if (!res.ok) throw new Error("Failed to load languages");
     const data = await res.json();
@@ -107,7 +107,7 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         cache: "no-store",
-        credentials: "omit",
+        credentials: "same-origin",
         body: JSON.stringify(body),
         signal: currentController.signal,
       });
@@ -190,29 +190,6 @@
       setStatus("Copy failed", true);
     }
   });
-
-  // --- Tabs ---
-  const tabText = document.getElementById("tab-text");
-  const tabDocs = document.getElementById("tab-docs");
-  const textPane = document.getElementById("text-pane");
-  const docsPane = document.getElementById("docs-pane");
-  const LS_TAB = "ot.tab";
-
-  function setTab(which) {
-    const docs = which === "docs";
-    tabText.classList.toggle("active", !docs);
-    tabDocs.classList.toggle("active", docs);
-    tabText.setAttribute("aria-selected", String(!docs));
-    tabDocs.setAttribute("aria-selected", String(docs));
-    textPane.hidden = docs;
-    docsPane.hidden = !docs;
-    try {
-      localStorage.setItem(LS_TAB, which);
-    } catch {}
-  }
-
-  tabText.addEventListener("click", () => setTab("text"));
-  tabDocs.addEventListener("click", () => setTab("docs"));
 
   // --- Document translation ---
   const docSrcSel = document.getElementById("doc-source-lang");
@@ -308,7 +285,7 @@
       const res = await fetch("/language/translate/v2/document", {
         method: "POST",
         cache: "no-store",
-        credentials: "omit",
+        credentials: "same-origin",
         body: fd,
       });
       if (!res.ok) {
@@ -342,8 +319,6 @@
       mirrorLanguagesToDocs();
       swapBtn.disabled = srcSel.value === "auto";
       updateCounter();
-      const savedTab = localStorage.getItem(LS_TAB) || "text";
-      setTab(savedTab === "docs" ? "docs" : "text");
       srcText.focus();
     } catch (e) {
       setStatus(e.message || "Failed to load languages", true);

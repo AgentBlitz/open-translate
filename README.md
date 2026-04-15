@@ -28,7 +28,7 @@ Designed to work with existing Google Cloud Translate client libraries and integ
 `https://translation.googleapis.com/language/translate/v2`
 
 **After:**
-`http://localhost:8005/language/translate/v2`
+`http://localhost:8000/language/translate/v2`
 
 ---
 
@@ -36,11 +36,11 @@ Designed to work with existing Google Cloud Translate client libraries and integ
 
 ### 🐳 Run with Docker
 
-This command launches the API on port `8005` using the `600M` distilled model.
+This command launches the API on port `8000` using the `600M` distilled model.
 
 ```bash
 docker pull ivanvmoreno/open-translate:latest
-docker run --gpus all -p 8005:8005 \
+docker run --gpus all -p 8000:8000 \
   -e NLLB_MODEL_SIZE=600M \
   -e DTYPE=fp16 \
   ivanvmoreno/open-translate:latest
@@ -55,19 +55,21 @@ docker run --gpus all -p 8005:8005 \
 A minimal Google-Translate-style frontend is served directly by the API at:
 
 ```
-http://localhost:8005/ui/
+http://localhost:8000/ui/
 ```
 
 Two panels (source + target), language dropdowns populated from `/language/translate/v2/languages`, auto-detect, swap, and copy. No build step, no external CDN, no third-party requests.
 
 ### Privacy guarantees enforced in code
 
-- No logging of request/response text anywhere in `server.py`.
-- No disk writes of user text — translation is an in-memory GPU pass and nothing is persisted.
+- **No logging of request or response text** anywhere in `server.py` — the only `print()` calls are startup model/OCR status lines.
+- **No disk writes of user content.** Text translations are an in-memory GPU pass. Document uploads (`.docx`, `.pdf`, images) flow end-to-end through `io.BytesIO`: `python-docx` reads from a BytesIO, `pypdf` / `pypdfium2` rasterize PDFs from a BytesIO, images go straight into `PIL.Image.open(io.BytesIO(...))` → NumPy → `PaddleOCR.predict(arr)`, and the translated DOCX is written into another BytesIO and streamed back. There are no `tempfile` calls, no `open(..., "w")`, and no intermediate files under `/tmp`.
+- **No translation cache.** There is no LRU / Redis / dict keyed on input text. Every request recomputes from scratch, and the only state that persists between requests is model weights.
+- **Response filename is hardcoded** to `translated.docx`. Client-provided filenames are used only for MIME-type classification and never echoed back in headers or logs.
 - **Access logs disabled** — `start.sh` launches uvicorn with `--no-access-log` so request lines never reach stdout (and therefore never reach Docker/journald log files).
 - **`GET /language/translate/v2` and `GET /language/translate/v2/detect` have been removed.** Only POST is accepted. This guarantees the text never appears in a URL, which would otherwise be captured by proxies, browser history, and access logs.
 - Every response carries `Cache-Control: no-store, no-cache, must-revalidate`, `Pragma: no-cache`, and `Referrer-Policy: no-referrer` via middleware, so browsers and intermediate proxies cannot cache translations to disk.
-- UI uses `cache: 'no-store'`, `credentials: 'omit'`, and stores only language-code preferences (never text) in `localStorage`.
+- UI uses `cache: 'no-store'`, `credentials: 'same-origin'`, and stores only language-code preferences (never text or filenames) in `localStorage`. Document downloads go via `URL.createObjectURL()` + immediate `revokeObjectURL()` — no OCR preview is ever rendered in the browser. `same-origin` credentials mode is required for deployments behind an auth-protecting reverse proxy (e.g. Vast.ai's caddy wrapper); the cookie is scoped to the server's own origin and never leaks to third parties.
 
 ### Operator responsibilities (the code cannot enforce these)
 
@@ -90,7 +92,7 @@ Compatible with **Google Cloud Translation API v2**.
 **Single Translation:**
 
 ```bash
-curl -X POST "http://localhost:8005/language/translate/v2" \
+curl -X POST "http://localhost:8000/language/translate/v2" \
   -H "Content-Type: application/json" \
   -d '{
     "q": "Hello world!",
@@ -102,7 +104,7 @@ curl -X POST "http://localhost:8005/language/translate/v2" \
 Send arrays of strings to maximize GPU throughput.
 
 ```bash
-curl -X POST "http://localhost:8005/language/translate/v2" \
+curl -X POST "http://localhost:8000/language/translate/v2" \
   -H "Content-Type: application/json" \
   -d '{
     "q": ["Hello world!", "Self hosting rulez"],
@@ -117,17 +119,37 @@ curl -X POST "http://localhost:8005/language/translate/v2" \
 **POST** `/language/translate/v2/detect`
 
 ```bash
-curl -X POST "http://localhost:8005/language/translate/v2/detect" \
+curl -X POST "http://localhost:8000/language/translate/v2/detect" \
   -H "Content-Type: application/json" \
   -d '{"q": "Hola mundo"}'
 ```
+
+### Translate a Document or Image
+
+**POST** `/language/translate/v2/document`
+
+Upload a document or image and receive a translated `.docx` back. The whole pipeline runs in-memory on the GPU — no temp files, no disk writes of user content.
+
+**Supported inputs:** `.docx`, `.pdf` (text-layer and scanned), `.jpg` / `.jpeg`, `.png`, `.webp`, `.bmp`, `.tif` / `.tiff`.
+
+Scanned PDFs and images are OCR'd with PaddleOCR 3.x on the same GPU as NLLB; text-layer PDFs and `.docx` inputs skip OCR entirely.
+
+```bash
+curl -X POST "http://localhost:8000/language/translate/v2/document" \
+  -F "file=@/path/to/input.pdf" \
+  -F "target=es" \
+  -F "source=en" \
+  -o translated.docx
+```
+
+Limits (env-tunable): `MAX_DOC_BYTES` (default **25 MB**), `MAX_PDF_PAGES` (default **50**), `OCR_DPI` (default **200**), `OCR_LANG` (default **en**). The response filename is always `translated.docx` — the client-provided filename is used only for MIME dispatch and never echoed back, for privacy.
 
 ### List Supported Languages
 
 **GET** `/language/translate/v2/languages`
 
 ```bash
-curl "http://localhost:8005/language/translate/v2/languages"
+curl "http://localhost:8000/language/translate/v2/languages"
 ```
 
 ---
@@ -142,7 +164,7 @@ curl "http://localhost:8005/language/translate/v2/languages"
 | `DTYPE` | `fp16` | `fp16`, `bf16`, or `fp32` |
 | `MAX_BATCH_SIZE` | `32` | Max sentences processed in parallel |
 | `HOST` | `0.0.0.0` | Bind host |
-| `PORT` | `8005` | Bind port |
+| `PORT` | `8000` | Bind port |
 
 ---
 
