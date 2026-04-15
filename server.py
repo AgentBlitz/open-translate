@@ -1,18 +1,24 @@
+import io
 import os
 import re
 import threading
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
+import numpy as np
 import torch
 import deepspeed
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from PIL import Image
 from pydantic import BaseModel, Field
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 
 import pycountry
 from langdetect import detect as ld_detect
 from langdetect.lang_detect_exception import LangDetectException
+
+Image.MAX_IMAGE_PIXELS = 50_000_000
 
 
 SIZE_TO_REPO = {
@@ -98,13 +104,161 @@ DTYPE = pick_dtype()
 MAX_BATCH_SIZE = int(os.getenv("MAX_BATCH_SIZE", "32"))
 MAX_INPUT_LENGTH = int(os.getenv("MAX_INPUT_LENGTH", "1024"))
 
+MAX_DOC_BYTES = int(os.getenv("MAX_DOC_BYTES", str(25 * 1024 * 1024)))
+MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", "50"))
+OCR_DPI = int(os.getenv("OCR_DPI", "200"))
+OCR_LANG = os.getenv("OCR_LANG", "en")
+
 tokenizer = None
 model = None
 ds_engine = None
 _MODEL_LOCK = threading.Lock()
 
+_ocr_engine = None
+_OCR_LOCK = threading.Lock()
+
 ISO_TO_NLLB: Dict[str, str] = {}
 ISO_NAME: Dict[str, str] = {}
+
+# Display names for NLLB ISO-639-3 codes that pycountry doesn't cover well
+# (Arabic dialects, regional languages, NLLB-specific codes). Keyed by iso3.
+NLLB_NAME_OVERRIDES: Dict[str, str] = {
+    "ace": "Acehnese",
+    "acm": "Mesopotamian Arabic",
+    "acq": "Ta'izzi-Adeni Arabic",
+    "aeb": "Tunisian Arabic",
+    "ajp": "South Levantine Arabic",
+    "apc": "North Levantine Arabic",
+    "arb": "Modern Standard Arabic",
+    "ars": "Najdi Arabic",
+    "ary": "Moroccan Arabic",
+    "arz": "Egyptian Arabic",
+    "awa": "Awadhi",
+    "ayr": "Central Aymara",
+    "azb": "South Azerbaijani",
+    "azj": "North Azerbaijani",
+    "bam": "Bambara",
+    "ban": "Balinese",
+    "bem": "Bemba",
+    "bho": "Bhojpuri",
+    "bjn": "Banjar",
+    "bug": "Buginese",
+    "ceb": "Cebuano",
+    "cjk": "Chokwe",
+    "crh": "Crimean Tatar",
+    "dik": "Southwestern Dinka",
+    "dyu": "Dyula",
+    "dzo": "Dzongkha",
+    "ewe": "Ewe",
+    "fij": "Fijian",
+    "fon": "Fon",
+    "fur": "Friulian",
+    "fuv": "Nigerian Fulfulde",
+    "gaz": "West Central Oromo",
+    "gla": "Scottish Gaelic",
+    "grn": "Guarani",
+    "hat": "Haitian Creole",
+    "hne": "Chhattisgarhi",
+    "ibo": "Igbo",
+    "ilo": "Ilocano",
+    "kab": "Kabyle",
+    "kac": "Jingpho",
+    "kam": "Kamba",
+    "kas": "Kashmiri",
+    "kbp": "Kabiyè",
+    "kea": "Kabuverdianu",
+    "khk": "Halh Mongolian",
+    "kik": "Kikuyu",
+    "kin": "Kinyarwanda",
+    "kmb": "Kimbundu",
+    "kmr": "Northern Kurdish",
+    "knc": "Central Kanuri",
+    "kon": "Kikongo",
+    "lij": "Ligurian",
+    "lim": "Limburgish",
+    "lin": "Lingala",
+    "lmo": "Lombard",
+    "ltg": "Latgalian",
+    "lua": "Luba-Kasai",
+    "lug": "Ganda",
+    "luo": "Luo",
+    "lus": "Mizo",
+    "mag": "Magahi",
+    "mai": "Maithili",
+    "min": "Minangkabau",
+    "mni": "Meitei",
+    "mos": "Mossi",
+    "nqo": "N'Ko",
+    "nso": "Northern Sotho",
+    "nus": "Nuer",
+    "nya": "Nyanja",
+    "oci": "Occitan",
+    "ory": "Odia",
+    "pag": "Pangasinan",
+    "pap": "Papiamento",
+    "pbt": "Southern Pashto",
+    "pes": "Western Persian",
+    "plt": "Plateau Malagasy",
+    "prs": "Dari",
+    "quy": "Ayacucho Quechua",
+    "run": "Rundi",
+    "sag": "Sango",
+    "san": "Sanskrit",
+    "sat": "Santali",
+    "scn": "Sicilian",
+    "shn": "Shan",
+    "sna": "Shona",
+    "snd": "Sindhi",
+    "som": "Somali",
+    "sot": "Southern Sotho",
+    "srd": "Sardinian",
+    "ssw": "Swati",
+    "sun": "Sundanese",
+    "swh": "Swahili",
+    "szl": "Silesian",
+    "tam": "Tamil",
+    "taq": "Tamasheq",
+    "tgk": "Tajik",
+    "tir": "Tigrinya",
+    "tpi": "Tok Pisin",
+    "tsn": "Tswana",
+    "tso": "Tsonga",
+    "tuk": "Turkmen",
+    "tum": "Tumbuka",
+    "twi": "Twi",
+    "tzm": "Central Atlas Tamazight",
+    "uig": "Uyghur",
+    "umb": "Umbundu",
+    "vec": "Venetian",
+    "war": "Waray",
+    "wol": "Wolof",
+    "xho": "Xhosa",
+    "ydd": "Eastern Yiddish",
+    "yor": "Yoruba",
+    "yue": "Cantonese",
+    "zsm": "Standard Malay",
+    "zul": "Zulu",
+    "bak": "Bashkir",
+    "kaz": "Kazakh",
+    "kir": "Kyrgyz",
+    "uzn": "Northern Uzbek",
+    "lao": "Lao",
+    "mya": "Burmese",
+    "khm": "Khmer",
+    "tha": "Thai",
+    "vie": "Vietnamese",
+    "jpn": "Japanese",
+    "kor": "Korean",
+    "heb": "Hebrew",
+    "ell": "Greek",
+    "hrv": "Croatian",
+    "srp": "Serbian",
+    "bos": "Bosnian",
+    "mkd": "Macedonian",
+    "slv": "Slovenian",
+    "ckb": "Central Kurdish",
+}
+
 BCP47_SPECIALS = {
     "zh-cn": "zho_Hans",
     "zh-sg": "zho_Hans",
@@ -125,6 +279,13 @@ def _pycountry_name(iso: str) -> Optional[str]:
         return getattr(lang, "name", None) if lang else None
     except Exception:
         return None
+
+
+def _display_name(iso: str) -> Optional[str]:
+    # Prefer our curated NLLB name overrides, then pycountry.
+    if iso in NLLB_NAME_OVERRIDES:
+        return NLLB_NAME_OVERRIDES[iso]
+    return _pycountry_name(iso)
 
 
 def _iso1_from_iso3(iso3: str) -> Optional[str]:
@@ -168,12 +329,12 @@ def _build_language_maps():
         iso1 = _iso1_from_iso3(iso3)
 
         ISO_TO_NLLB[iso3] = chosen
-        ISO_NAME.setdefault(iso3, _pycountry_name(iso3) or iso3)
+        ISO_NAME.setdefault(iso3, _display_name(iso3) or iso3)
 
         if iso1:
             iso1 = iso1.lower()
             ISO_TO_NLLB[iso1] = chosen
-            ISO_NAME.setdefault(iso1, _pycountry_name(iso1) or iso1)
+            ISO_NAME.setdefault(iso1, _display_name(iso1) or _display_name(iso3) or iso1)
 
     # BCP-47 region/script special-cases
     for k, v in BCP47_SPECIALS.items():
@@ -237,7 +398,7 @@ def _detect_one(text: str) -> Dict[str, Any]:
 
 @app.on_event("startup")
 def _startup():
-    global tokenizer, model, ds_engine
+    global tokenizer, model, ds_engine, _ocr_engine
 
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -277,6 +438,26 @@ def _startup():
         ds_engine = None
 
     _build_language_maps()
+
+    try:
+        from paddleocr import PaddleOCR
+
+        device = "gpu" if torch.cuda.is_available() else "cpu"
+        _ocr_engine = PaddleOCR(
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            use_textline_orientation=True,
+            lang=OCR_LANG,
+            device=device,
+        )
+        print(f"[startup] PaddleOCR ready on {device} (lang={OCR_LANG})", flush=True)
+    except Exception as e:
+        print(
+            f"[startup] PaddleOCR unavailable ({type(e).__name__}): {e}. "
+            f"Document translation will reject image / scanned-PDF inputs.",
+            flush=True,
+        )
+        _ocr_engine = None
 
 
 @torch.inference_mode()
@@ -391,20 +572,272 @@ def languages(
         description="Optional target language for localized names (compatibility).",
     ),
 ) -> Dict[str, Any]:
-    langs = []
-    seen = set()
-
-    for iso in ISO_TO_NLLB.keys():
+    # Dedupe by NLLB target code so each physical language appears once.
+    # Prefer the shortest ISO key (ISO-639-1 when available, else ISO-639-3).
+    best_key_for_nllb: Dict[str, str] = {}
+    for iso, nllb in ISO_TO_NLLB.items():
         if "-" in iso:
             continue
-        if iso in seen:
-            continue
-        seen.add(iso)
+        current = best_key_for_nllb.get(nllb)
+        if current is None or len(iso) < len(current):
+            best_key_for_nllb[nllb] = iso
 
+    langs = []
+    for nllb, iso in best_key_for_nllb.items():
         entry = {"language": iso}
         if target:
             entry["name"] = ISO_NAME.get(iso, iso)
         langs.append(entry)
 
-    langs.sort(key=lambda x: x["language"])
+    langs.sort(key=lambda x: x.get("name", x["language"]).lower())
     return {"data": {"languages": langs}}
+
+
+# ---------------------------------------------------------------------------
+# Document translation: DOCX / PDF / images via PaddleOCR + NLLB
+# ---------------------------------------------------------------------------
+
+DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
+
+
+def _classify_upload(filename: str, content_type: str) -> str:
+    name = (filename or "").lower()
+    ct = (content_type or "").lower()
+    if name.endswith(".docx") or ct == DOCX_MIME:
+        return "docx"
+    if name.endswith(".pdf") or ct == "application/pdf":
+        return "pdf"
+    if ct.startswith("image/") or any(name.endswith(ext) for ext in _IMAGE_EXTS):
+        return "image"
+    return "unknown"
+
+
+def _extract_docx_runs(data: bytes):
+    from docx import Document
+
+    doc = Document(io.BytesIO(data))
+    runs = []
+    for para in doc.paragraphs:
+        for run in para.runs:
+            if run.text and run.text.strip():
+                runs.append(run)
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for para in cell.paragraphs:
+                    for run in para.runs:
+                        if run.text and run.text.strip():
+                            runs.append(run)
+    return doc, runs
+
+
+def _extract_pdf_text_layer(data: bytes) -> List[str]:
+    from pypdf import PdfReader
+
+    reader = PdfReader(io.BytesIO(data))
+    pages: List[str] = []
+    total_chars = 0
+    for page in reader.pages[:MAX_PDF_PAGES]:
+        try:
+            text = page.extract_text() or ""
+        except Exception:
+            text = ""
+        pages.append(text)
+        total_chars += len(text.strip())
+    if total_chars < 20:
+        return []
+    return pages
+
+
+def _rasterize_pdf(data: bytes, dpi: int) -> List[Image.Image]:
+    import pypdfium2 as pdfium
+
+    pdf = pdfium.PdfDocument(io.BytesIO(data))
+    try:
+        n = min(len(pdf), MAX_PDF_PAGES)
+        scale = dpi / 72.0
+        images: List[Image.Image] = []
+        for i in range(n):
+            page = pdf[i]
+            try:
+                pil = page.render(scale=scale).to_pil().convert("RGB")
+                images.append(pil)
+            finally:
+                page.close()
+        return images
+    finally:
+        pdf.close()
+
+
+def _ocr_image(img: Image.Image) -> List[str]:
+    if _ocr_engine is None:
+        raise HTTPException(
+            status_code=503,
+            detail="OCR engine not loaded; image and scanned-PDF inputs are unavailable.",
+        )
+    arr = np.array(img.convert("RGB"))
+    with _OCR_LOCK:
+        result = _ocr_engine.predict(arr)
+    lines: List[str] = []
+    if not result:
+        return lines
+    for res in result:
+        texts = None
+        if hasattr(res, "get"):
+            texts = res.get("rec_texts")
+        if texts is None and hasattr(res, "__getitem__"):
+            try:
+                texts = res["rec_texts"]
+            except Exception:
+                texts = None
+        if texts:
+            for t in texts:
+                if t and t.strip():
+                    lines.append(t.strip())
+    return lines
+
+
+def _ocr_pdf_pages(pages: List[Image.Image]) -> List[str]:
+    out: List[str] = []
+    for i, page in enumerate(pages):
+        if i > 0:
+            out.append("")
+        out.extend(_ocr_image(page))
+    return out
+
+
+def _translate_paragraphs(
+    texts: List[str], src_nllb: str, tgt_nllb: str
+) -> List[str]:
+    if not texts:
+        return []
+    gen = {"max_new_tokens": 256, "num_beams": 1, "truncate_input": True}
+    out: List[str] = []
+    # Preserve empty-string separators without sending them through the model.
+    idx_to_text: List[Tuple[int, str]] = [
+        (i, t) for i, t in enumerate(texts) if t
+    ]
+    translated: List[Optional[str]] = [None] * len(texts)
+    for blank_i, _ in [(i, t) for i, t in enumerate(texts) if not t]:
+        translated[blank_i] = ""
+
+    for start in range(0, len(idx_to_text), MAX_BATCH_SIZE):
+        chunk = idx_to_text[start : start + MAX_BATCH_SIZE]
+        chunk_texts = [t for _, t in chunk]
+        chunk_out = _translate_batch(
+            chunk_texts, src_nllb=src_nllb, tgt_nllb=tgt_nllb, gen=gen
+        )
+        for (orig_i, _), t_out in zip(chunk, chunk_out):
+            translated[orig_i] = t_out
+
+    for t in translated:
+        out.append(t if t is not None else "")
+    return out
+
+
+def _build_translated_docx(paragraphs: List[str]) -> bytes:
+    from docx import Document
+
+    doc = Document()
+    for p in paragraphs:
+        doc.add_paragraph(p)
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
+def _resolve_src_for_text(
+    sample_text: str, source: Optional[str]
+) -> str:
+    if source:
+        return _resolve_to_nllb(source)
+    detected = _detect_iso639_1(sample_text) or "en"
+    try:
+        return _resolve_to_nllb(detected)
+    except HTTPException:
+        return _resolve_to_nllb("en")
+
+
+@app.post("/language/translate/v2/document")
+async def translate_document(
+    file: UploadFile = File(...),
+    target: str = Form(...),
+    source: Optional[str] = Form(None),
+) -> StreamingResponse:
+    if tokenizer is None or model is None:
+        raise HTTPException(status_code=503, detail="Model not loaded yet.")
+
+    if file.size is not None and file.size > MAX_DOC_BYTES:
+        raise HTTPException(status_code=413, detail="File too large.")
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty file.")
+    if len(data) > MAX_DOC_BYTES:
+        raise HTTPException(status_code=413, detail="File too large.")
+
+    kind = _classify_upload(file.filename or "", file.content_type or "")
+    tgt_nllb = _resolve_to_nllb(target)
+
+    if kind == "docx":
+        doc, runs = _extract_docx_runs(data)
+        texts = [r.text for r in runs]
+        if not texts:
+            out_bytes = _build_translated_docx([])
+        else:
+            src_nllb = _resolve_src_for_text(texts[0], source)
+            translated = _translate_paragraphs(texts, src_nllb, tgt_nllb)
+            for run, new_text in zip(runs, translated):
+                run.text = new_text
+            buf = io.BytesIO()
+            doc.save(buf)
+            out_bytes = buf.getvalue()
+
+    elif kind == "pdf":
+        page_texts = _extract_pdf_text_layer(data)
+        if page_texts:
+            # Text-layer PDF: one paragraph per non-empty line, page-separated by blanks.
+            paragraphs: List[str] = []
+            for i, page_text in enumerate(page_texts):
+                if i > 0:
+                    paragraphs.append("")
+                for line in page_text.splitlines():
+                    line = line.strip()
+                    if line:
+                        paragraphs.append(line)
+        else:
+            images = _rasterize_pdf(data, OCR_DPI)
+            paragraphs = _ocr_pdf_pages(images)
+        if not paragraphs:
+            raise HTTPException(status_code=422, detail="No text extracted from PDF.")
+        sample = next((p for p in paragraphs if p), "")
+        src_nllb = _resolve_src_for_text(sample, source)
+        translated = _translate_paragraphs(paragraphs, src_nllb, tgt_nllb)
+        out_bytes = _build_translated_docx(translated)
+
+    elif kind == "image":
+        try:
+            img = Image.open(io.BytesIO(data))
+            img.load()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Unsupported or corrupt image.")
+        paragraphs = _ocr_image(img)
+        if not paragraphs:
+            raise HTTPException(status_code=422, detail="No text detected in image.")
+        sample = next((p for p in paragraphs if p), "")
+        src_nllb = _resolve_src_for_text(sample, source)
+        translated = _translate_paragraphs(paragraphs, src_nllb, tgt_nllb)
+        out_bytes = _build_translated_docx(translated)
+
+    else:
+        raise HTTPException(
+            status_code=415,
+            detail="Unsupported file type. Use .docx, .pdf, or common image formats.",
+        )
+
+    return StreamingResponse(
+        io.BytesIO(out_bytes),
+        media_type=DOCX_MIME,
+        headers={"Content-Disposition": 'attachment; filename="translated.docx"'},
+    )

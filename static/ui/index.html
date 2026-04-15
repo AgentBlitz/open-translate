@@ -11,9 +11,13 @@
     <header class="topbar">
       <h1>open-translate</h1>
       <p class="privacy">Text is never logged or written to disk on the server.</p>
+      <nav class="tabs" role="tablist" aria-label="Translation mode">
+        <button id="tab-text" type="button" class="tab active" role="tab" aria-selected="true">Text</button>
+        <button id="tab-docs" type="button" class="tab" role="tab" aria-selected="false">Documents</button>
+      </nav>
     </header>
 
-    <main class="panes">
+    <main id="text-pane" class="panes">
       <section class="pane" aria-label="Source">
         <div class="pane-head">
           <select id="source-lang" aria-label="Source language">
@@ -49,6 +53,39 @@
         </div>
       </section>
     </main>
+
+    <section id="docs-pane" class="docs" hidden aria-label="Document translation">
+      <div class="docs-card">
+        <div class="docs-langs">
+          <select id="doc-source-lang" aria-label="Document source language">
+            <option value="auto">Detect language</option>
+          </select>
+          <span class="docs-arrow">→</span>
+          <select id="doc-target-lang" aria-label="Document target language"></select>
+        </div>
+        <div
+          id="drop-zone"
+          class="drop-zone"
+          tabindex="0"
+          role="button"
+          aria-label="Drop a file or click to choose"
+        >
+          <p class="drop-title">Drop a document or image</p>
+          <p class="drop-hint">.docx · .pdf · .jpg · .png · .webp · .bmp · .tiff (up to 25&nbsp;MB)</p>
+          <p id="drop-file" class="drop-file"></p>
+          <input
+            id="drop-input"
+            type="file"
+            accept=".pdf,.docx,.jpg,.jpeg,.png,.webp,.bmp,.tif,.tiff,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*"
+            hidden
+          />
+        </div>
+        <div class="docs-actions">
+          <button id="doc-translate-btn" type="button" class="btn-primary" disabled>Translate &amp; download</button>
+          <span id="doc-status" class="status"></span>
+        </div>
+      </div>
+    </section>
 
     <script src="app.js"></script>
   </body>

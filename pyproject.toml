@@ -17,6 +17,11 @@ dependencies = [
     "deepspeed",
     "pycountry",
     "langdetect",
+    "python-multipart",
+    "python-docx",
+    "pypdf",
+    "pypdfium2",
+    "Pillow",
 ]
 name = "open-translate"
 version = "0.1.0"

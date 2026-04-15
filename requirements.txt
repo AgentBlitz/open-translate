@@ -155,3 +155,16 @@ watchfiles==1.1.1
     # via uvicorn
 websockets==15.0.1
     # via uvicorn
+# --- document translation (OCR endpoint) ---
+# paddlepaddle-gpu + paddleocr are installed separately (see Dockerfile /
+# scripts/runpod-setup.sh) because paddle ships its own non-pypi index.
+python-multipart==0.0.20
+    # via open-translate (pyproject.toml)
+python-docx==1.1.2
+    # via open-translate (pyproject.toml)
+pypdf==5.1.0
+    # via open-translate (pyproject.toml)
+pypdfium2==4.30.0
+    # via open-translate (pyproject.toml)
+Pillow==11.0.0
+    # via open-translate (pyproject.toml)

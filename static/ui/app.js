@@ -29,7 +29,7 @@
   let debounceTimer = null;
 
   async function loadLanguages() {
-    const res = await fetch("/language/translate/v2/languages", {
+    const res = await fetch("/language/translate/v2/languages?target=en", {
       cache: "no-store",
       credentials: "omit",
     });
@@ -38,7 +38,17 @@
     const langs = (data && data.data && data.data.languages) || [];
 
     const decorated = langs
-      .map((l) => ({ code: l.language, name: nameOf(l.language) }))
+      .map((l) => {
+        const browserName = nameOf(l.language);
+        // Prefer the browser's localized name when it actually resolves
+        // (i.e. it's not just the raw code echoed back). Otherwise fall back
+        // to the server-provided name (which knows NLLB-specific codes).
+        const name =
+          browserName && browserName.toLowerCase() !== l.language.toLowerCase()
+            ? browserName
+            : l.name || l.language;
+        return { code: l.language, name };
+      })
       .sort((a, b) => a.name.localeCompare(b.name));
 
     for (const l of decorated) {
@@ -181,11 +191,159 @@
     }
   });
 
+  // --- Tabs ---
+  const tabText = document.getElementById("tab-text");
+  const tabDocs = document.getElementById("tab-docs");
+  const textPane = document.getElementById("text-pane");
+  const docsPane = document.getElementById("docs-pane");
+  const LS_TAB = "ot.tab";
+
+  function setTab(which) {
+    const docs = which === "docs";
+    tabText.classList.toggle("active", !docs);
+    tabDocs.classList.toggle("active", docs);
+    tabText.setAttribute("aria-selected", String(!docs));
+    tabDocs.setAttribute("aria-selected", String(docs));
+    textPane.hidden = docs;
+    docsPane.hidden = !docs;
+    try {
+      localStorage.setItem(LS_TAB, which);
+    } catch {}
+  }
+
+  tabText.addEventListener("click", () => setTab("text"));
+  tabDocs.addEventListener("click", () => setTab("docs"));
+
+  // --- Document translation ---
+  const docSrcSel = document.getElementById("doc-source-lang");
+  const docTgtSel = document.getElementById("doc-target-lang");
+  const dropZone = document.getElementById("drop-zone");
+  const dropInput = document.getElementById("drop-input");
+  const dropFile = document.getElementById("drop-file");
+  const docStatus = document.getElementById("doc-status");
+  const docTranslateBtn = document.getElementById("doc-translate-btn");
+  const MAX_DOC_BYTES = 25 * 1024 * 1024;
+
+  let stagedFile = null;
+
+  function mirrorLanguagesToDocs() {
+    for (const opt of srcSel.options) {
+      const o = document.createElement("option");
+      o.value = opt.value;
+      o.textContent = opt.textContent;
+      docSrcSel.appendChild(o);
+    }
+    for (const opt of tgtSel.options) {
+      const o = document.createElement("option");
+      o.value = opt.value;
+      o.textContent = opt.textContent;
+      docTgtSel.appendChild(o);
+    }
+    docSrcSel.value = srcSel.value;
+    docTgtSel.value = tgtSel.value;
+  }
+
+  function setDocStatus(msg, isError = false) {
+    docStatus.textContent = msg || "";
+    docStatus.classList.toggle("error", !!isError);
+  }
+
+  function stageFile(file) {
+    if (!file) {
+      stagedFile = null;
+      dropFile.textContent = "";
+      docTranslateBtn.disabled = true;
+      return;
+    }
+    if (file.size > MAX_DOC_BYTES) {
+      setDocStatus("File too large (max 25 MB).", true);
+      return;
+    }
+    stagedFile = file;
+    dropFile.textContent = `${file.name} · ${(file.size / 1024).toFixed(0)} KB`;
+    docTranslateBtn.disabled = false;
+    setDocStatus("");
+  }
+
+  dropZone.addEventListener("click", () => dropInput.click());
+  dropZone.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      dropInput.click();
+    }
+  });
+  dropInput.addEventListener("change", () => {
+    stageFile(dropInput.files && dropInput.files[0]);
+  });
+  ["dragenter", "dragover"].forEach((evt) => {
+    dropZone.addEventListener(evt, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropZone.classList.add("drag");
+    });
+  });
+  ["dragleave", "drop"].forEach((evt) => {
+    dropZone.addEventListener(evt, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropZone.classList.remove("drag");
+    });
+  });
+  dropZone.addEventListener("drop", (e) => {
+    const files = e.dataTransfer && e.dataTransfer.files;
+    if (files && files[0]) stageFile(files[0]);
+  });
+
+  docTranslateBtn.addEventListener("click", async () => {
+    if (!stagedFile) return;
+    docTranslateBtn.disabled = true;
+    setDocStatus("Uploading & translating…");
+    try {
+      const fd = new FormData();
+      fd.append("file", stagedFile);
+      fd.append("target", docTgtSel.value);
+      if (docSrcSel.value && docSrcSel.value !== "auto") {
+        fd.append("source", docSrcSel.value);
+      }
+      const res = await fetch("/language/translate/v2/document", {
+        method: "POST",
+        cache: "no-store",
+        credentials: "omit",
+        body: fd,
+      });
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`;
+        try {
+          const err = await res.json();
+          if (err && err.detail) detail = err.detail;
+        } catch {}
+        throw new Error(detail);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "translated.docx";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setDocStatus("Done.");
+    } catch (e) {
+      setDocStatus(e.message || "Translation failed", true);
+    } finally {
+      docTranslateBtn.disabled = !stagedFile;
+    }
+  });
+
   (async () => {
     try {
       await loadLanguages();
+      mirrorLanguagesToDocs();
       swapBtn.disabled = srcSel.value === "auto";
       updateCounter();
+      const savedTab = localStorage.getItem(LS_TAB) || "text";
+      setTab(savedTab === "docs" ? "docs" : "text");
       srcText.focus();
     } catch (e) {
       setStatus(e.message || "Failed to load languages", true);
