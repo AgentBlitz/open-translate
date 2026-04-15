@@ -17,8 +17,14 @@ RUN apt-get update -y && \
     apt-get install -y --no-install-recommends \
         python3.11 python3-pip python3.11-venv \
         ca-certificates curl \
-        build-essential && \
+        build-essential \
+        libgl1 libglib2.0-0 && \
     rm -rf /var/lib/apt/lists/*
+# libgl1 + libglib2.0-0: paddlex -> opencv-contrib-python imports cv2, which
+# dlopens libGL.so.1 at module load. The minimal nvidia/cuda base images are
+# headless and don't ship libGL. Without these two packages the PaddleOCR
+# prewarm in the builder — and `_startup` in the runtime stage — both fail
+# with `ImportError: libGL.so.1: cannot open shared object file`.
 
 RUN python3.11 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
@@ -165,10 +171,17 @@ RUN apt-get update -y && \
     apt-get install -y --no-install-recommends \
         python3.11 \
         ca-certificates \
-        curl && \
+        curl \
+        libgl1 libglib2.0-0 && \
     rm -rf /var/lib/apt/lists/* && \
     ln -sf /usr/bin/python3.11 /usr/bin/python && \
     ln -sf /usr/bin/python3.11 /usr/bin/python3
+# libgl1 + libglib2.0-0: required at runtime too, because server.py's
+# _startup imports `from paddleocr import PaddleOCR`, which transitively
+# loads opencv -> cv2 -> libGL.so.1. Without these, the runtime container
+# starts but `_ocr_engine` is left None and image / scanned-PDF requests
+# return 503. Text + DOCX + text-layer PDF still work in that case, but
+# the image would no longer be fully self-contained for OCR paths.
 
 COPY --from=builder /opt/venv         /opt/venv
 COPY --from=builder /opt/hf_cache     /opt/hf_cache
