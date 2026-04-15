@@ -78,7 +78,15 @@ PY
 # Pre-download PaddleOCR detection + recognition + textline-orientation weights
 # (~500 MB) into /opt/paddlex_cache. Uses device=cpu because the builder stage
 # has no GPU; weights are architecture-independent.
-RUN python - <<'PY'
+#
+# paddlepaddle-gpu's import-time init unconditionally dlopens libcuda.so.1 to
+# query the driver, even when device=cpu is requested later. At `docker build`
+# time there is no host NVIDIA driver bind-mounted, so libcuda.so.1 is absent
+# and the import raises. Workaround: point LD_LIBRARY_PATH at the CUDA driver
+# stub library that the -devel base image ships for exactly this case. The env
+# var is scoped to this RUN only — it does not leak into the runtime stage
+# because we copy only the cache and venv directories out of the builder.
+RUN LD_LIBRARY_PATH=/usr/local/cuda/lib64/stubs:${LD_LIBRARY_PATH:-} python - <<'PY'
 from paddleocr import PaddleOCR
 PaddleOCR(
     use_doc_orientation_classify=False,

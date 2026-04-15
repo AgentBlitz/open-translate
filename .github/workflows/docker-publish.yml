@@ -1,8 +1,20 @@
 name: Build and Publish Docker Image
 
 on:
+  # Rebuild only when something the image actually depends on changes.
+  # Doc-only pushes (README, CLAUDE.md, .planning/**, etc.) do NOT trigger CI.
   push:
     branches: ["main"]
+    paths:
+      - "Dockerfile"
+      - "requirements.txt"
+      - "server.py"
+      - "start.sh"
+      - "static/ui/**"
+      - ".github/workflows/docker-publish.yml"
+  # Manual trigger from the Actions tab — force a rebuild any time without
+  # needing a commit. Useful after bumping a base image or dependency index,
+  # or to publish a one-off build from a branch.
   workflow_dispatch:
 
 permissions:
