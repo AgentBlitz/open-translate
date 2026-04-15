@@ -35,7 +35,7 @@ Designed to work with existing Google Cloud Translate client libraries and integ
 
 ### 🐳 Run with Docker
 
-One command, no config, no volume mounts, no HuggingFace account required. The image ships with NLLB-200-distilled-1.3B (~3.3 GB) and PaddleOCR weights (~500 MB) pre-baked, so `docker run` is fully offline after pull.
+One command, no config, no volume mounts, no HuggingFace account required. The image ships with NLLB-200-distilled-1.3B (~3.3 GB) and PaddleOCR detection + recognition + textline-orientation weights (~500 MB) **pre-baked**, so `docker run` is fully offline after pull. First boot takes ~30 seconds (NLLB model load + DeepSpeed init on your GPU); subsequent restarts are instant. All OCR paths (image uploads, scanned PDFs) work out of the box — no volume mount needed for weight persistence.
 
 ```bash
 docker run --gpus all -p 8005:8005 ghcr.io/agentblitz/open-translate:latest

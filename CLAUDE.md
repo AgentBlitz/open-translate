@@ -112,6 +112,8 @@ ssh -p <SSH_PORT> -i ~/.ssh/id_ed25519 root@<POD_HOST> \
 
 [docker-publish.yml](.github/workflows/docker-publish.yml) builds and publishes `ghcr.io/agentblitz/open-translate:latest` + `:<sha>` to GitHub Container Registry on every push that touches `Dockerfile`, `requirements.txt`, `server.py`, `start.sh`, `static/ui/**`, or the workflow itself (see the `paths:` filter). Doc-only pushes do not trigger a rebuild. Manual triggers via the Actions tab `workflow_dispatch` button also work.
 
+**First successful build** (2026-04-15, commit `fe99d87`): digest `sha256:b607eade3bc0b42fc70e2855d088dff7b9266c869c29225610895348f1b8e83d`. Baked weights: NLLB-200-distilled-1.3B + PaddleOCR det+rec+textline-orientation. Build time 21m 26s cold (no layer cache after the libgl1 apt-get change invalidated the builder stage).
+
 The image is **fully self-contained**: NLLB-200-distilled-1.3B (~3.3 GB) and PaddleOCR detection+recognition+textline-orientation weights (~500 MB) are baked into `/opt/hf_cache` and `/opt/paddlex_cache` at build time, so `docker run` requires no network access at boot and no volume mounts. One command to run it anywhere with an NVIDIA GPU:
 
 ```bash
