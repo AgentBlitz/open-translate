@@ -50,7 +50,7 @@ A self-hostable translation API + Google-Translate-style web UI, compatible with
 | [requirements.txt](requirements.txt) | Pinned deps (torch 2.9.1, transformers, deepspeed 0.18.3) |
 | [scripts/runpod-setup.sh](scripts/runpod-setup.sh) | One-shot installer for RunPod PyTorch pods |
 | [scripts/runpod-launch.sh](scripts/runpod-launch.sh) | start / stop / restart / status for the server on RunPod |
-| [.github/workflows/docker-publish.yml](.github/workflows/docker-publish.yml) | Builds and pushes to Docker Hub on every push to main |
+| [.github/workflows/docker-publish.yml](.github/workflows/docker-publish.yml) | Builds and pushes to `ghcr.io/agentblitz/open-translate` on image-relevant pushes to main (Dockerfile, requirements.txt, server.py, start.sh, static/ui/**) or manual `workflow_dispatch`. |
 
 ## Local development
 
@@ -58,10 +58,10 @@ A self-hostable translation API + Google-Translate-style web UI, compatible with
 # Create venv (Python 3.11+)
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-./start.sh   # serves on 0.0.0.0:8000 by default
+./start.sh   # serves on 0.0.0.0:8005 by default
 ```
 
-Open http://localhost:8000/ui/. Note that CPU-only inference works but is slow; GPU strongly recommended.
+Open http://localhost:8005/ui/. Note that CPU-only inference works but is slow; GPU strongly recommended.
 
 ## Deploying on RunPod (source install, current primary path)
 
@@ -108,19 +108,38 @@ ssh -p <SSH_PORT> -i ~/.ssh/id_ed25519 root@<POD_HOST> \
 
 `scripts/runpod-launch.sh` supports `start | stop | restart | status`, writes pid to `server.pid`, logs to `server.log`, polls `/health` before returning.
 
-## Deploying on RunPod (Docker image path, recommended for future)
+## Deploying anywhere via the published GHCR image (recommended primary path)
 
-Once [docker-publish.yml](.github/workflows/docker-publish.yml) has produced an image, skip the rsync/install dance entirely:
+[docker-publish.yml](.github/workflows/docker-publish.yml) builds and publishes `ghcr.io/agentblitz/open-translate:latest` + `:<sha>` to GitHub Container Registry on every push that touches `Dockerfile`, `requirements.txt`, `server.py`, `start.sh`, `static/ui/**`, or the workflow itself (see the `paths:` filter). Doc-only pushes do not trigger a rebuild. Manual triggers via the Actions tab `workflow_dispatch` button also work.
 
-1. Set GitHub repo secrets: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`.
-2. Push to `main` → Actions builds and pushes `<username>/open-translate:latest` + `:<sha>`.
-3. On RunPod, create a pod using **that published image** as the container image (instead of the RunPod PyTorch template). Expose port 8000, mount a volume at `/workspace/.cache/huggingface` for HF cache persistence. The image's `CMD ["/start.sh"]` auto-launches the server.
+The image is **fully self-contained**: NLLB-200-distilled-1.3B (~3.3 GB) and PaddleOCR detection+recognition+textline-orientation weights (~500 MB) are baked into `/opt/hf_cache` and `/opt/paddlex_cache` at build time, so `docker run` requires no network access at boot and no volume mounts. One command to run it anywhere with an NVIDIA GPU:
+
+```bash
+docker run --gpus all -p 8005:8005 ghcr.io/agentblitz/open-translate:latest
+```
+
+Then open `http://localhost:8005/ui/`.
+
+**Host requirements**: NVIDIA Container Runtime + host driver ≥ 570 for Blackwell (RTX 5090 / sm_120) or ≥ 550 for Ada (RTX 4090 / sm_89). `TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9;9.0;12.0"` is baked into the image, covering Ampere through Blackwell.
+
+**Environment overrides** (all optional):
+
+- `NLLB_MODEL_SIZE` — switch model. Only `1.3B-distilled` is baked; other sizes force a HF download on first boot (mount a volume at `/opt/hf_cache` to persist it).
+- `DTYPE=fp16|bf16|fp32`, `MAX_BATCH_SIZE`, `MAX_INPUT_LENGTH`, `MAX_DOC_BYTES`, `MAX_PDF_PAGES`, `OCR_DPI`, `OCR_LANG`, `HOST`, `PORT`.
+
+**HTTPS / auth**: the container serves plain HTTP on 8005. Front it with your own reverse proxy (caddy, nginx, traefik, a cloud LB) if you need TLS termination or auth. The Vast deployment demonstrates one such pattern — see the "Raw-IP access via caddy" section below.
+
+**GHCR package visibility**: if the first successful build publishes as **private**, flip to public via **https://github.com/orgs/AgentBlitz/packages** → `open-translate` → Package settings → Danger Zone → Change visibility → Public. Also **Connect repository** → `AgentBlitz/open-translate` so the README renders on the GHCR page.
+
+## Deploying on RunPod (legacy path, kept for reference)
+
+Before the self-contained GHCR image existed, the RunPod path was a source install via `rsync` + `scripts/runpod-setup.sh`. That still works but the GHCR image makes it redundant — create a RunPod pod using `ghcr.io/agentblitz/open-translate:latest` as the container image directly, expose port 8005, done.
 
 ## Building the Docker image
 
 The Dockerfile is **Blackwell-ready** (CUDA 12.8.1 base, cu128 torch wheels, `TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9;9.0;12.0"`).
 
-**CI (recommended):** push to `main`; [docker-publish.yml](.github/workflows/docker-publish.yml) builds on GitHub's amd64 runners and pushes to Docker Hub. The workflow already frees disk first because the image is ~10 GB.
+**CI (recommended):** push a change to any image-relevant file to `main`; [docker-publish.yml](.github/workflows/docker-publish.yml) builds on GitHub's amd64 runners and pushes to `ghcr.io/agentblitz/open-translate`. The workflow frees ~5 GB of runner disk first because the full build needs ~13 GB transiently (builder stage + runtime stage + layer cache).
 
 **Manual build on an amd64 Linux host:**
 
@@ -162,6 +181,7 @@ RunPod doesn't offer running-pod snapshots in the traditional VM sense. The repl
 - **PaddlePaddle 3.0 has no cu128 wheel.** The cu126 wheel (installed from `https://www.paddlepaddle.org.cn/packages/stable/cu126/`) runs correctly on the CUDA 12.8.1 base image via CUDA minor-version forward compatibility, confirmed on RTX 5090 / sm_120 with driver ≥ 570. If the cu126 wheel ever breaks on a new pod, `server.py`'s `_startup` catches the import/init failure and leaves `_ocr_engine = None` — the server still serves text + DOCX + text-layer PDFs; image/scanned-PDF requests return 503. Do not switch to CPU paddle silently, because a CPU fallback would be ~10× slower per page with no visible signal in the UI.
 - **Vast.ai (CUDA 13.1) needs Paddle cu129 ≥ 3.2.2.** The cu129 index (`https://www.paddlepaddle.org.cn/packages/stable/cu129/`) no longer ships `paddlepaddle-gpu==3.0.0` — lowest is 3.1.0. 3.2.2 is the tested pin. It overwrites torch's `nvidia-*-cu12` 12.8.x libs with 12.9.x equivalents; torch still reports `cuda 12.8` and detects `sm_120`, so this is cosmetic but worth watching on future bumps.
 - **Do not pin `paddleocr==3.0.0` on Python 3.12.** Its transitive `paddlex[ocr]==3.0.0` tries to build an old pandas from source, and pip's isolated build env is missing `pkg_resources`, which aborts install with `ModuleNotFoundError`. `--no-build-isolation` does not help. Fix: install `paddleocr` unpinned → resolves to 3.4.x (all-wheel). The `PaddleOCR(use_doc_orientation_classify=…, use_doc_unwarping=…, use_textline_orientation=…, device=…)` constructor, `.predict(np_array)` call, and `rec_texts` result shape are all unchanged, so `server.py`'s `_ocr_image()` works on both 3.0.x and 3.4.x with no code changes.
+- **`docker build` of paddlepaddle-gpu fails without a CUDA driver stub.** Paddle 3.x unconditionally `dlopen`s `libcuda.so.1` at `import paddle` time to probe the host driver, even when `device='cpu'` is requested later. At `docker build` time there is no host driver bind-mounted, so the stub library shipped in `-devel` CUDA base images (`/usr/local/cuda/lib64/stubs/libcuda.so`) needs to be symlinked to `libcuda.so.1` and added to `LD_LIBRARY_PATH` for the prewarm RUN. See [Dockerfile](Dockerfile)'s paddle prewarm step — the block is scoped (env vars don't leak into the runtime stage) and intentionally **non-fatal**: on any import or init failure, the Python script catches the exception, logs the full traceback, and exits 0 so the image still ships. In the fallback path, `/opt/paddlex_cache` ships empty and `server.py`'s `_startup` downloads OCR weights on first container run (~10s cold start). Do not re-enable the strict behaviour — it blocks CI.
 - **PaddleOCR 3.0 API differs from 2.x.** Use `PaddleOCR(use_doc_orientation_classify=False, use_doc_unwarping=False, use_textline_orientation=True, lang=..., device='gpu')` and call `.predict(numpy_array)`; results expose `rec_texts` on each element. The old `use_angle_cls`/`.ocr()` API is gone.
 - **PaddleOCR weights cache** lives at `$PADDLE_PDX_CACHE_HOME` (default `/workspace/.cache/paddlex` on RunPod, `/opt/paddlex_cache` in the Docker image). Mount `/workspace` as a persistent volume so both the HF and Paddle caches survive pod restarts.
 - **VRAM budget.** NLLB-1.3B-distilled ≈ 3.3 GB, PaddleOCR det+rec ≈ 1–2 GB, total ~4–6 GB. Comfortable on the 5090's ~32 GB. If OOM appears under concurrent load, cap uvicorn with `--limit-concurrency 4` in [start.sh](start.sh) — do not disable the GPU path.
@@ -171,7 +191,7 @@ RunPod doesn't offer running-pod snapshots in the traditional VM sense. The repl
 After any deploy, run these from a shell that can reach the server (locally, via SSH tunnel, or via the RunPod proxy URL):
 
 ```bash
-BASE="http://localhost:8000"   # or https://<pod-id>-8000.proxy.runpod.net
+BASE="http://localhost:8005"   # or the pod proxy URL, or the caddy-fronted HTTPS URL
 
 curl -fsS $BASE/health | jq .
 curl -fsS "$BASE/language/translate/v2/languages" | jq '.data.languages | length'
