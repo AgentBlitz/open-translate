@@ -2,7 +2,7 @@
 #
 # open-translate — self-contained GPU translation server
 # Built for NVIDIA GPUs with driver >= 570 (Blackwell/Ada/Hopper).
-# Runs: docker run --gpus all -p 8005:8005 ghcr.io/kamstar/open-translate:latest
+# Runs: docker run --gpus all -p 8005:8005 ghcr.io/agentblitz/open-translate:latest
 
 # ---- builder stage ----------------------------------------------------------
 # devel base is used only at build time so any wheel that needs CUDA headers

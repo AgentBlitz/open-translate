@@ -1,7 +1,6 @@
 # 🌍 `open-translate`
 
-[![Deploy on RunPod](https://img.shields.io/badge/Deploy%20on-RunPod-5d29f0?style=for-the-badge&logo=runpod)](https://console.runpod.io/deploy?template=s2nhyzkvdh&ref=464fs7zk)
-[![Docker Hub](https://img.shields.io/docker/pulls/ivanvmoreno/open-translate?style=for-the-badge&logo=docker)](https://hub.docker.com/repository/docker/ivanvmoreno/open-translate/general)
+[![GHCR](https://img.shields.io/badge/ghcr.io-agentblitz%2Fopen--translate-2088FF?style=for-the-badge&logo=github)](https://github.com/AgentBlitz/open-translate/pkgs/container/open-translate)
 
 > **A high-performance, self-hostable translation API compatible with Google Cloud Translate.**
 > Built on Meta's **NLLB-200** and optimized with **DeepSpeed** for efficient GPU inference.
@@ -28,7 +27,7 @@ Designed to work with existing Google Cloud Translate client libraries and integ
 `https://translation.googleapis.com/language/translate/v2`
 
 **After:**
-`http://localhost:8000/language/translate/v2`
+`http://localhost:8005/language/translate/v2`
 
 ---
 
@@ -36,17 +35,30 @@ Designed to work with existing Google Cloud Translate client libraries and integ
 
 ### 🐳 Run with Docker
 
-This command launches the API on port `8000` using the `600M` distilled model.
+One command, no config, no volume mounts, no HuggingFace account required. The image ships with NLLB-200-distilled-1.3B (~3.3 GB) and PaddleOCR weights (~500 MB) pre-baked, so `docker run` is fully offline after pull.
 
 ```bash
-docker pull ivanvmoreno/open-translate:latest
-docker run --gpus all -p 8000:8000 \
-  -e NLLB_MODEL_SIZE=600M \
-  -e DTYPE=fp16 \
-  ivanvmoreno/open-translate:latest
+docker run --gpus all -p 8005:8005 ghcr.io/agentblitz/open-translate:latest
 ```
 
-> **Note:** The first run downloads the model weights, which may take some time depending on your internet speed.
+Then open **http://localhost:8005/ui/**.
+
+**Requirements:**
+
+- NVIDIA GPU with ≥ 5 GB VRAM (5 GB for NLLB-1.3B-distilled in fp16 + 1–2 GB for PaddleOCR)
+- NVIDIA Container Runtime installed on the host ([setup guide](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html))
+- Host driver **≥ 570** for Blackwell (RTX 5090), or **≥ 550** for Ada (RTX 4090). The image is CUDA 12.8 and supports `sm_80`, `sm_86`, `sm_89`, `sm_90`, `sm_120`.
+
+**Swap the model size** at run time by setting `NLLB_MODEL_SIZE` (note: only `1.3B-distilled` is baked into the image — any other size forces a HuggingFace download on first boot):
+
+```bash
+docker run --gpus all -p 8005:8005 \
+  -e NLLB_MODEL_SIZE=3.3B \
+  -v open-translate-hf:/opt/hf_cache \
+  ghcr.io/agentblitz/open-translate:latest
+```
+
+The named volume `open-translate-hf` persists the downloaded weights across container restarts.
 
 ---
 
@@ -55,7 +67,7 @@ docker run --gpus all -p 8000:8000 \
 A minimal Google-Translate-style frontend is served directly by the API at:
 
 ```
-http://localhost:8000/ui/
+http://localhost:8005/ui/
 ```
 
 Two panels (source + target), language dropdowns populated from `/language/translate/v2/languages`, auto-detect, swap, and copy. No build step, no external CDN, no third-party requests.
@@ -92,7 +104,7 @@ Compatible with **Google Cloud Translation API v2**.
 **Single Translation:**
 
 ```bash
-curl -X POST "http://localhost:8000/language/translate/v2" \
+curl -X POST "http://localhost:8005/language/translate/v2" \
   -H "Content-Type: application/json" \
   -d '{
     "q": "Hello world!",
@@ -104,7 +116,7 @@ curl -X POST "http://localhost:8000/language/translate/v2" \
 Send arrays of strings to maximize GPU throughput.
 
 ```bash
-curl -X POST "http://localhost:8000/language/translate/v2" \
+curl -X POST "http://localhost:8005/language/translate/v2" \
   -H "Content-Type: application/json" \
   -d '{
     "q": ["Hello world!", "Self hosting rulez"],
@@ -119,7 +131,7 @@ curl -X POST "http://localhost:8000/language/translate/v2" \
 **POST** `/language/translate/v2/detect`
 
 ```bash
-curl -X POST "http://localhost:8000/language/translate/v2/detect" \
+curl -X POST "http://localhost:8005/language/translate/v2/detect" \
   -H "Content-Type: application/json" \
   -d '{"q": "Hola mundo"}'
 ```
@@ -135,7 +147,7 @@ Upload a document or image and receive a translated `.docx` back. The whole pipe
 Scanned PDFs and images are OCR'd with PaddleOCR 3.x on the same GPU as NLLB; text-layer PDFs and `.docx` inputs skip OCR entirely.
 
 ```bash
-curl -X POST "http://localhost:8000/language/translate/v2/document" \
+curl -X POST "http://localhost:8005/language/translate/v2/document" \
   -F "file=@/path/to/input.pdf" \
   -F "target=es" \
   -F "source=en" \
@@ -149,7 +161,7 @@ Limits (env-tunable): `MAX_DOC_BYTES` (default **25 MB**), `MAX_PDF_PAGES` (defa
 **GET** `/language/translate/v2/languages`
 
 ```bash
-curl "http://localhost:8000/language/translate/v2/languages"
+curl "http://localhost:8005/language/translate/v2/languages"
 ```
 
 ---
@@ -164,7 +176,13 @@ curl "http://localhost:8000/language/translate/v2/languages"
 | `DTYPE` | `fp16` | `fp16`, `bf16`, or `fp32` |
 | `MAX_BATCH_SIZE` | `32` | Max sentences processed in parallel |
 | `HOST` | `0.0.0.0` | Bind host |
-| `PORT` | `8000` | Bind port |
+| `PORT` | `8005` | Bind port |
+| `HF_HOME` | `/opt/hf_cache` | HuggingFace cache dir (weights baked in at this path) |
+| `PADDLE_PDX_CACHE_HOME` | `/opt/paddlex_cache` | PaddleOCR cache dir (weights baked in at this path) |
+| `MAX_DOC_BYTES` | `26214400` | Max upload size for document translation (25 MB) |
+| `MAX_PDF_PAGES` | `50` | Max pages processed per PDF upload |
+| `OCR_DPI` | `200` | Raster DPI for scanned PDFs before OCR |
+| `OCR_LANG` | `en` | PaddleOCR language model |
 
 ---
 
