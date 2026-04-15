@@ -79,23 +79,56 @@ PY
 # (~500 MB) into /opt/paddlex_cache. Uses device=cpu because the builder stage
 # has no GPU; weights are architecture-independent.
 #
-# paddlepaddle-gpu's import-time init unconditionally dlopens libcuda.so.1 to
-# query the driver, even when device=cpu is requested later. At `docker build`
-# time there is no host NVIDIA driver bind-mounted, so libcuda.so.1 is absent
-# and the import raises. Workaround: point LD_LIBRARY_PATH at the CUDA driver
-# stub library that the -devel base image ships for exactly this case. The env
-# var is scoped to this RUN only — it does not leak into the runtime stage
-# because we copy only the cache and venv directories out of the builder.
-RUN LD_LIBRARY_PATH=/usr/local/cuda/lib64/stubs:${LD_LIBRARY_PATH:-} python - <<'PY'
-from paddleocr import PaddleOCR
-PaddleOCR(
-    use_doc_orientation_classify=False,
-    use_doc_unwarping=False,
-    use_textline_orientation=True,
-    lang="en",
-    device="cpu",
-)
-print("PaddleOCR cached")
+# This is the awkward step in the build. paddlepaddle-gpu's import-time init
+# dlopens libcuda.so.1 to probe the driver, even when device=cpu is requested
+# later. At `docker build` time there is no host NVIDIA driver bind-mounted so
+# libcuda.so.1 is absent and the import raises. The combined workaround:
+#
+#   1. Symlink libcuda.so → libcuda.so.1 in the CUDA driver stub directory
+#      that the -devel base image ships for exactly this case (stubs are
+#      API-only; they let dlopen succeed without a real driver).
+#   2. Point LD_LIBRARY_PATH at the stub dir for this RUN only (scoped env
+#      doesn't leak into the runtime stage because we only copy /opt/venv
+#      and /opt/*_cache out of the builder).
+#   3. Set CUDA_VISIBLE_DEVICES="" so paddle skips any GPU enumeration.
+#
+# If all of the above still fails (paddle 3.x has been tightening its driver
+# checks), the step is **non-fatal**: the image still ships, just without
+# baked OCR weights, and the server downloads them on first container start
+# (adds ~10-15s to initial boot, invisible to end users thereafter).
+RUN ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1 && \
+    LD_LIBRARY_PATH=/usr/local/cuda/lib64/stubs:${LD_LIBRARY_PATH:-} \
+    CUDA_VISIBLE_DEVICES="" \
+    python - <<'PY'
+import sys, traceback
+
+# Non-fatal prewarm: on any failure, print the traceback as a warning and
+# exit 0 so the build continues. The first container start will then
+# download OCR weights (~10-15s) via server.py's _startup on the user's
+# actual GPU, where libcuda.so.1 is bind-mounted by the NVIDIA runtime.
+
+try:
+    import paddle
+    print(f"paddle {paddle.__version__}  compiled_with_cuda={paddle.is_compiled_with_cuda()}", flush=True)
+except Exception:
+    print("[WARN] paddle import failed in builder — skipping OCR prewarm. Image still ships.", flush=True)
+    traceback.print_exc()
+    sys.exit(0)
+
+try:
+    from paddleocr import PaddleOCR
+    PaddleOCR(
+        use_doc_orientation_classify=False,
+        use_doc_unwarping=False,
+        use_textline_orientation=True,
+        lang="en",
+        device="cpu",
+    )
+    print("PaddleOCR cached into /opt/paddlex_cache", flush=True)
+except Exception:
+    print("[WARN] PaddleOCR prewarm failed in builder — skipping. Image still ships.", flush=True)
+    traceback.print_exc()
+    sys.exit(0)
 PY
 
 
